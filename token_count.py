@@ -8,6 +8,8 @@
 
 Токенизаторы:
   * tiktoken (OpenAI): cl100k_base и o200k_base — считаются локально;
+  * Qwen и DeepSeek (Китай): токенизаторы с Hugging Face (скачивается только
+    небольшой файл tokenizer.json, ключ не нужен);
   * Claude: официальный метод count_tokens (нужен ключ в файле .env).
 
 Запуск:
@@ -25,9 +27,18 @@ from dataclasses import dataclass, field
 import anthropic
 import tiktoken
 from dotenv import load_dotenv
+from tokenizers import Tokenizer as HFTokenizer  # наш класс тоже зовётся Tokenizer
 
 # Кодировки OpenAI: cl100k_base (GPT-4 / GPT-3.5), o200k_base (GPT-4o и новее).
 TIKTOKEN_ENCODINGS = ("cl100k_base", "o200k_base")
+
+# Китайские открытые модели: короткое имя колонки -> репозиторий на Hugging Face.
+# Берём только модели, у которых есть готовый tokenizer.json (не нужен
+# trust_remote_code, то есть чужой код из репозитория не выполняется).
+HF_MODELS = {
+    "qwen2.5": "Qwen/Qwen2.5-7B-Instruct",
+    "deepseek": "deepseek-ai/DeepSeek-V3",
+}
 
 # Модели Claude. У каждой модели свой токенизатор, поэтому считаем для каждой.
 CLAUDE_MODELS = (
@@ -44,7 +55,7 @@ CLAUDE_MODELS = (
 OVERHEAD_PROBE = "."
 
 # Ширина колонки с названием текста в таблицах.
-NAME_W = 28
+NAME_W = 26
 
 # ---------------------------------------------------------------------------
 # Группа 1. Один текст на разных языках
@@ -204,6 +215,32 @@ def tiktoken_tokenizers() -> list[Tokenizer]:
     return result
 
 
+def hf_tokenizers() -> list[Tokenizer]:
+    """Считает токены токенизаторами моделей с Hugging Face (Qwen, DeepSeek).
+
+    Скачивается только tokenizer.json (несколько МБ), потом он кэшируется.
+    Если файл не удалось получить (нет сети, репозиторий недоступен), модель
+    пропускается с пояснением, а скрипт продолжает работу.
+    """
+    print("\nЗагружаю токенизаторы Hugging Face...")
+    result = []
+    for short, repo in HF_MODELS.items():
+        try:
+            tok = HFTokenizer.from_pretrained(repo)
+        except Exception as e:  # библиотека бросает общий Exception при сбое загрузки
+            print(f"  {repo}: не удалось загрузить ({type(e).__name__}) — пропускаю.")
+            result.append(Tokenizer(f"{repo} (Hugging Face)", short, {}))
+            continue
+        # add_special_tokens=False: не считаем служебные токены начала текста.
+        counts = {
+            name: len(tok.encode(text, add_special_tokens=False).ids)
+            for name, text in ALL_TEXTS.items()
+        }
+        print(f"  {repo}: готово")
+        result.append(Tokenizer(f"{repo} (Hugging Face)", short, counts))
+    return result
+
+
 def count_with_claude(
     client: anthropic.Anthropic, model: str
 ) -> tuple[dict[str, int], int]:
@@ -277,7 +314,7 @@ def print_detail(tok: Tokenizer) -> None:
     names = list(TEXTS)
     base_tokens = tok.counts[names[0]]  # английский — точка отсчёта
     header = (
-        f"{'Один текст на разных языках':<{NAME_W}}{'Симв.':>7}{'Байт':>7}{'Слов':>6}"
+        f"{'Один текст, разные языки':<{NAME_W}}{'Симв.':>7}{'Байт':>7}{'Слов':>6}"
         f"{'Токенов':>9}{'Симв./ток.':>12}{'Ток./слово':>12}{'× к англ.':>11}"
     )
     print(header)
@@ -309,7 +346,7 @@ def print_detail(tok: Tokenizer) -> None:
 
 def print_summary(tokenizers: list[Tokenizer]) -> None:
     """Сводные таблицы: все токенизаторы рядом."""
-    width = 12
+    width = 11  # 8 колонок: вся строка укладывается в 120 символов
 
     def table(title: str, names: list[str], cell) -> None:
         print(f"\n\n=== {title} ===")
@@ -356,7 +393,7 @@ def main() -> None:
     for name, text in ALL_TEXTS.items():
         print(f"\n[{name}]\n{text}")
 
-    tokenizers = tiktoken_tokenizers() + claude_tokenizers()
+    tokenizers = tiktoken_tokenizers() + hf_tokenizers() + claude_tokenizers()
 
     for tok in tokenizers:
         if tok.counts:
