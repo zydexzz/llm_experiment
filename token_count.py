@@ -1,5 +1,10 @@
-"""Эксперимент: сколько токенов занимает один и тот же текст на английском,
-русском и казахском (кириллица и латиница) у разных токенизаторов.
+"""Эксперимент: сколько токенов занимают тексты у разных токенизаторов.
+
+Две группы текстов:
+  1. Один и тот же текст на английском, русском и казахском (кириллица и
+     латиница) — сравнение языков и письменностей.
+  2. Реальные тексты только на русском (сообщение клиента, переписка, код,
+     числа и суммы) — сколько токенов занимает «живое» общение.
 
 Токенизаторы:
   * tiktoken (OpenAI): cl100k_base и o200k_base — считаются локально;
@@ -37,6 +42,13 @@ CLAUDE_MODELS = (
 # Чтобы её вычесть, считаем запрос из одного символа «.» и принимаем, что сам
 # символ — ровно 1 токен (приближённо, возможна ошибка в ±1 токен).
 OVERHEAD_PROBE = "."
+
+# Ширина колонки с названием текста в таблицах.
+NAME_W = 28
+
+# ---------------------------------------------------------------------------
+# Группа 1. Один текст на разных языках
+# ---------------------------------------------------------------------------
 
 EN = (
     "Large language models split text into small pieces called tokens. "
@@ -101,6 +113,70 @@ TEXTS = {
     "Казахский (латиница)": kazakh_cyrillic_to_latin(KK_CYRL),
 }
 
+# ---------------------------------------------------------------------------
+# Группа 2. Реальные тексты (только русский, без перевода)
+# ---------------------------------------------------------------------------
+
+# Короткое сообщение клиента — приведено как есть, вместе с опечаткой
+# (нет пробела после точки в «телефона.Звонить»).
+CLIENT_MESSAGE = (
+    "Здравствуйте! Есть ряд вопросов. Прошу позвонить по номеру телефона."
+    "Звонить из Казахстана"
+)
+
+# Переписка менеджера с клиентом — как есть.
+CHAT_DIALOG = (
+    "Клиент: Здравствуйте, хочу узнать подробнее о семинаре [ссылка]\n"
+    'Менеджер: Здравствуйте! Вас приветствует "Pro Sport Performance", '
+    "подскажите чем мы можем Вам помочь?\n"
+    "Менеджер: Расширенный курс по спортивной реабилитации. "
+    "Ведущий: Кристофер Дженкинс. Даты: 19 - 23 октября. "
+    "Время: 10.00-17.00 (каждый день). Место: г. Алматы, ул. Майлина, 230. "
+    "Стоимость: 100 000 ТГ. Запись по предоплате от 35000 тг. "
+    "Планируете записаться на семинар?\n"
+    "Клиент: К большому сожалению, я не смогу принять участие в курсе."
+)
+
+# Кусок кода на Python (комментарии на русском). Код рабочий: считает
+# предоплату и печатает цены в тенге.
+PYTHON_CODE = '''\
+def prepayment(price_tg: int, percent: float = 0.35) -> int:
+    # Предоплата за семинар: по умолчанию 35% от стоимости, в тенге.
+    return round(price_tg * percent)
+
+
+def format_tg(amount: int) -> str:
+    # 100000 -> "100 000 тг"
+    return f"{amount:,}".replace(",", " ") + " тг"
+
+
+seminars = {"Расширенный курс": 100_000, "Мастер-класс": 45_000}
+for name, price in seminars.items():
+    print(f"{name}: {format_tg(price)}, предоплата от {format_tg(prepayment(price))}")
+'''.rstrip()
+
+# Текст с числами, датами и суммами. Арифметика сверена:
+# 29 + 18 = 47; 29 × 35 000 + 18 × 100 000 = 2 815 000; 29 × 65 000 = 1 885 000;
+# 29 / 47 = 61,7%; 18 / 47 = 38,3%; 2 815 000 / 47 ≈ 59 893,62; 60 − 47 = 13.
+NUMBERS_TEXT = (
+    "Итоги регистрации на семинар за период с 01.09.2026 по 18.10.2026: "
+    "зарегистрировано 47 участников, из них 29 (61,7%) внесли предоплату "
+    "от 35 000 тг, 18 (38,3%) оплатили полную стоимость 100 000 тг. "
+    "Общая сумма поступлений: 29 × 35 000 + 18 × 100 000 = 2 815 000 тг. "
+    "Ожидаемый остаток к 18.10.2026: 29 × 65 000 = 1 885 000 тг. "
+    "Средний чек: 59 893,62 тг. Свободных мест: 13 из 60."
+)
+
+REAL_TEXTS = {
+    "Сообщение клиента": CLIENT_MESSAGE,
+    "Переписка менеджер-клиент": CHAT_DIALOG,
+    "Код на Python": PYTHON_CODE,
+    "Числа, даты, суммы": NUMBERS_TEXT,
+}
+
+# Все тексты вместе — для подсчёта.
+ALL_TEXTS = {**TEXTS, **REAL_TEXTS}
+
 
 @dataclass
 class Tokenizer:
@@ -118,7 +194,7 @@ def tiktoken_tokenizers() -> list[Tokenizer]:
     for enc_name in TIKTOKEN_ENCODINGS:
         enc = tiktoken.get_encoding(enc_name)
         counts = {}
-        for name, text in TEXTS.items():
+        for name, text in ALL_TEXTS.items():
             tokens = enc.encode(text)
             assert enc.decode(tokens) == text  # проверка обратимости
             counts[name] = len(tokens)
@@ -140,7 +216,7 @@ def count_with_claude(
         ).input_tokens
 
     overhead = raw(OVERHEAD_PROBE) - 1
-    return {name: raw(text) - overhead for name, text in TEXTS.items()}, overhead
+    return {name: raw(text) - overhead for name, text in ALL_TEXTS.items()}, overhead
 
 
 def claude_tokenizers() -> list[Tokenizer]:
@@ -192,42 +268,58 @@ def claude_tokenizers() -> list[Tokenizer]:
 
 
 def print_detail(tok: Tokenizer) -> None:
-    """Подробная таблица одного токенизатора."""
-    names = list(TEXTS)
-    base_tokens = tok.counts[names[0]]  # английский — точка отсчёта
+    """Подробные таблицы одного токенизатора: для обеих групп текстов."""
     print(f"\n\n=== {tok.label} ===")
     if tok.note:
         print(f"({tok.note})")
+
+    # Группа 1: языки, с отношением к английскому.
+    names = list(TEXTS)
+    base_tokens = tok.counts[names[0]]  # английский — точка отсчёта
     header = (
-        f"{'Текст':<24}{'Симв.':>7}{'Байт':>7}{'Слов':>6}"
+        f"{'Один текст на разных языках':<{NAME_W}}{'Симв.':>7}{'Байт':>7}{'Слов':>6}"
         f"{'Токенов':>9}{'Симв./ток.':>12}{'Ток./слово':>12}{'× к англ.':>11}"
     )
     print(header)
     print("-" * len(header))
     for name, text in TEXTS.items():
         n_tokens = tok.counts[name]
-        chars = len(text)
-        n_bytes = len(text.encode("utf-8"))
-        words = len(text.split())
         print(
-            f"{name:<24}{chars:>7}{n_bytes:>7}{words:>6}"
-            f"{n_tokens:>9}{chars / n_tokens:>12.2f}{n_tokens / words:>12.2f}"
-            f"{n_tokens / base_tokens:>11.2f}"
+            f"{name:<{NAME_W}}{len(text):>7}{len(text.encode('utf-8')):>7}"
+            f"{len(text.split()):>6}{n_tokens:>9}{len(text) / n_tokens:>12.2f}"
+            f"{n_tokens / len(text.split()):>12.2f}{n_tokens / base_tokens:>11.2f}"
+        )
+
+    # Группа 2: реальные тексты, без отношения к английскому (перевода нет).
+    print()
+    header = (
+        f"{'Реальные тексты (русский)':<{NAME_W}}{'Симв.':>7}{'Байт':>7}{'Слов':>6}"
+        f"{'Токенов':>9}{'Симв./ток.':>12}{'Ток./слово':>12}"
+    )
+    print(header)
+    print("-" * len(header))
+    for name, text in REAL_TEXTS.items():
+        n_tokens = tok.counts[name]
+        print(
+            f"{name:<{NAME_W}}{len(text):>7}{len(text.encode('utf-8')):>7}"
+            f"{len(text.split()):>6}{n_tokens:>9}{len(text) / n_tokens:>12.2f}"
+            f"{n_tokens / len(text.split()):>12.2f}"
         )
 
 
 def print_summary(tokenizers: list[Tokenizer]) -> None:
     """Сводные таблицы: все токенизаторы рядом."""
-    names = list(TEXTS)
     width = 12
 
-    def table(title: str, cell) -> None:
+    def table(title: str, names: list[str], cell) -> None:
         print(f"\n\n=== {title} ===")
-        header = f"{'Текст':<24}" + "".join(f"{t.short:>{width}}" for t in tokenizers)
+        header = f"{'Текст':<{NAME_W}}" + "".join(
+            f"{t.short:>{width}}" for t in tokenizers
+        )
         print(header)
         print("-" * len(header))
         for name in names:
-            row = f"{name:<24}"
+            row = f"{name:<{NAME_W}}"
             for tok in tokenizers:
                 row += f"{cell(tok, name):>{width}}"
             print(row)
@@ -238,10 +330,20 @@ def print_summary(tokenizers: list[Tokenizer]) -> None:
     def ratio_cell(tok: Tokenizer, name: str) -> str:
         if not tok.counts:
             return "н/д"
-        return f"{tok.counts[name] / tok.counts[names[0]]:.2f}"
+        return f"{tok.counts[name] / tok.counts[next(iter(TEXTS))]:.2f}"
 
-    table("СВОДКА: число токенов", tokens_cell)
-    table("СВОДКА: во сколько раз больше токенов, чем в английском", ratio_cell)
+    def chars_cell(tok: Tokenizer, name: str) -> str:
+        if not tok.counts:
+            return "н/д"
+        return f"{len(ALL_TEXTS[name]) / tok.counts[name]:.2f}"
+
+    table("СВОДКА: число токенов", list(ALL_TEXTS), tokens_cell)
+    table(
+        "СВОДКА: во сколько раз больше токенов, чем в английском (группа 1)",
+        list(TEXTS),
+        ratio_cell,
+    )
+    table("СВОДКА: символов на токен (больше = экономнее)", list(ALL_TEXTS), chars_cell)
 
 
 def main() -> None:
@@ -251,7 +353,7 @@ def main() -> None:
     load_dotenv(override=True)
 
     print("Тексты\n" + "=" * 6)
-    for name, text in TEXTS.items():
+    for name, text in ALL_TEXTS.items():
         print(f"\n[{name}]\n{text}")
 
     tokenizers = tiktoken_tokenizers() + claude_tokenizers()
